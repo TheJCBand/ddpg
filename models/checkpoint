@@ -1,0 +1,2 @@
+model_checkpoint_path: "RoboschoolInvertedPendulumSwingup-v1Agent"
+all_model_checkpoint_paths: "RoboschoolInvertedPendulumSwingup-v1Agent"
