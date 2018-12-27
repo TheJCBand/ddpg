@@ -10,7 +10,7 @@ import random
 import matplotlib.pyplot as plt
 
 # User parameters
-envName = 'RoboschoolInvertedPendulumSwingup-v1' # Envirornment
+envName = 'HalfCheetah-v2' # Envirornment
 nCriticUnits = [400,300] # Number of nodes in each hidden layer of actor network
 nActorUnits = [400,300] # Number of nodes in each hidden layer of critic network
 nEpisodes = 25000 # Number of episodes to train for
@@ -24,7 +24,7 @@ criticLearningRate = 10**-3
 actorLearningRate = 10**-4
 decay = 0.018 # L2 weight decay for critic
 renderDuringTraining = False
-plotLearningCurve = False # Plot cummulative reward per episode during training
+plotLearningCurve = True # Plot cummulative reward per episode during training
 
 # Make environment
 env = gym.make(envName)
@@ -39,7 +39,8 @@ aTarget = tf.placeholder(tf.float32, shape=(None,aDim))
 r = tf.placeholder(tf.float32, shape=(None,1))
 
 # Define L2 regularizer
-reg = tf.contrib.layers.l2_regularizer(decay)
+# reg = tf.contrib.layers.l2_regularizer(decay)
+reg = None
 
 # Critic network
 with tf.variable_scope('critic'):
@@ -68,6 +69,15 @@ with tf.variable_scope('actor'):
     actor = tf.layers.batch_normalization(actor)
     actor = tf.layers.dense(actor,aDim,activation=tf.nn.tanh,name='actor')
 
+# Critic with policy
+with tf.variable_scope('critic',reuse=True):
+    criticPolicy = tf.layers.batch_normalization(s)
+    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg)
+    criticPolicy = tf.layers.batch_normalization(criticPolicy)
+    criticPolicy = tf.keras.layers.concatenate([criticPolicy,actor])
+    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg)
+    criticPolicy = tf.layers.dense(criticPolicy,1,kernel_regularizer=reg)
+
 # Actor target network
 with tf.variable_scope('actorTarget'):
     actorTarget = tf.layers.batch_normalization(sTarget)
@@ -94,12 +104,14 @@ with tf.control_dependencies(updateOps):
     
     # Train Actor
     # Gradient of critic network w.r.t. action
-    criticActionGrad = tf.gradients(critic,a)[0]
+    # criticActionGrad = tf.gradients(critic,a)[0]
     # Gradient of policy performance w.r.t. actor network parameters.  
     # tf.gradients multiplies gradient by grad_ys, so this line applies the chain rule
-    policyGrad = tf.gradients(actor,actorWeights,grad_ys=criticActionGrad)
+    # policyGrad = tf.gradients(actor,actorWeights,grad_ys=criticActionGrad)
     # Negative learning rate is used for gradient ascent.  apply_gradients takes one step of gradient descent.
-    trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).apply_gradients(zip(policyGrad,actorWeights))
+    # trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).apply_gradients(zip(policyGrad,actorWeights))
+    actorLoss = tf.reduce_mean(criticPolicy)
+    trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).minimize(actorLoss)
     
 # Train Targets
 trainCriticTarget = [tf.assign(criticTargetWeight, tau*criticWeight+(1-tau)*criticTargetWeight) for criticTargetWeight, criticWeight in zip(criticTargetWeights, criticWeights)]
