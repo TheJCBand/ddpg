@@ -16,6 +16,7 @@ nActorUnits = [400,300] # Number of nodes in each hidden layer of critic network
 nEpisodes = 25000 # Number of episodes to train for
 sigma = 0.2 # Orenstein-Uhlenbeck parameters
 theta = 0.15
+std = 0.1 # Gaussian noise parameter
 minibatchSize = 64 
 gamma = 0.99 # Discount factor
 tau = 0.001 # Parameter for updating target networks
@@ -24,7 +25,8 @@ criticLearningRate = 10**-3
 actorLearningRate = 10**-4
 decay = 0.018 # L2 weight decay for critic
 renderDuringTraining = False
-plotLearningCurve = True # Plot cummulative reward per episode during training
+plotLearningCurve = False # Plot cummulative reward per episode during training
+plotLoss = False
 
 # Make environment
 env = gym.make(envName)
@@ -40,58 +42,39 @@ r = tf.placeholder(tf.float32, shape=(None,1))
 
 # Define L2 regularizer
 # reg = tf.contrib.layers.l2_regularizer(decay)
-reg = None
+# reg = None
+
+# Function for defining simple MLP network
+def mlp(net,nUnits,outputUnits,activation=tf.nn.relu,outputActivation=None,trainable=True,name=None):
+    for layer in range(len(nUnits)):
+        net=tf.layers.dense(net,nUnits[layer],activation=activation,trainable=True) 
+    return tf.layers.dense(net,outputUnits,activation=outputActivation,name=name)
 
 # Critic network
 with tf.variable_scope('critic'):
-    critic = tf.layers.batch_normalization(s)
-    critic = tf.layers.dense(critic,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg)
-    critic = tf.layers.batch_normalization(critic)
-    critic = tf.keras.layers.concatenate([critic,a])
-    critic = tf.layers.dense(critic,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg)
-    critic = tf.layers.dense(critic,1,kernel_regularizer=reg)
+    critic = mlp(tf.concat([s,a],axis=-1),nCriticUnits,1)
 
 # Critic target network
 with tf.variable_scope('criticTarget'):
-    criticTarget = tf.layers.batch_normalization(sTarget,trainable=False)
-    criticTarget = tf.layers.dense(criticTarget,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg,trainable=False)
-    criticTarget = tf.layers.batch_normalization(criticTarget,trainable=False)
-    criticTarget = tf.keras.layers.concatenate([criticTarget,aTarget],trainable=False)
-    criticTarget = tf.layers.dense(criticTarget,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg,trainable=False)
-    criticTarget = tf.layers.dense(criticTarget,1,kernel_regularizer=reg,trainable=False)
+    criticTarget = mlp(tf.concat([sTarget,aTarget],axis=-1),nCriticUnits,1,trainable=False)
 
 # Actor network
 with tf.variable_scope('actor'):
-    actor = tf.layers.batch_normalization(s)
-    actor = tf.layers.dense(actor,nActorUnits[0],activation=tf.nn.relu)
-    actor = tf.layers.batch_normalization(actor)
-    actor = tf.layers.dense(actor,nActorUnits[1],activation=tf.nn.relu)
-    actor = tf.layers.batch_normalization(actor)
-    actor = tf.layers.dense(actor,aDim,activation=tf.nn.tanh,name='actor')
+    actor = mlp(s,nActorUnits,aDim,outputActivation=tf.tanh,name='actor')
 
 # Critic with policy
 with tf.variable_scope('critic',reuse=True):
-    criticPolicy = tf.layers.batch_normalization(s)
-    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg)
-    criticPolicy = tf.layers.batch_normalization(criticPolicy)
-    criticPolicy = tf.keras.layers.concatenate([criticPolicy,actor])
-    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg)
-    criticPolicy = tf.layers.dense(criticPolicy,1,kernel_regularizer=reg)
+    criticPolicy = mlp(tf.concat([s,actor],axis=-1),nCriticUnits,1)
 
 # Actor target network
 with tf.variable_scope('actorTarget'):
-    actorTarget = tf.layers.batch_normalization(sTarget)
-    actorTarget = tf.layers.dense(actorTarget,nActorUnits[0],activation=tf.nn.relu,trainable=False) 
-    actorTarget = tf.layers.batch_normalization(actorTarget)
-    actorTarget = tf.layers.dense(actorTarget,nActorUnits[1],activation=tf.nn.relu,trainable=False)
-    actorTarget = tf.layers.batch_normalization(actorTarget)
-    actorTarget = tf.layers.dense(actorTarget,aDim,activation=tf.nn.tanh,trainable=False)
+    actorTarget = mlp(sTarget,nActorUnits,aDim,outputActivation=tf.tanh,trainable=False)
 
 # Get weight variables for each network
-criticWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='critic')
-criticTargetWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='criticTarget')
-actorWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='actor')
-actorTargetWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='actorTarget')
+criticWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='critic/')
+criticTargetWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='criticTarget/')
+actorWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='actor/')
+actorTargetWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='actorTarget/')
 
 # Define the training op for each network
 # This is needed for batch normalization
@@ -100,18 +83,11 @@ with tf.control_dependencies(updateOps):
     
     # Train Critic
     L = tf.losses.mean_squared_error(r+gamma*criticTarget, critic)
-    trainCritic = tf.train.AdamOptimizer(criticLearningRate).minimize(L)
+    trainCritic = tf.train.AdamOptimizer(criticLearningRate).minimize(L,var_list=criticWeights)
     
     # Train Actor
-    # Gradient of critic network w.r.t. action
-    # criticActionGrad = tf.gradients(critic,a)[0]
-    # Gradient of policy performance w.r.t. actor network parameters.  
-    # tf.gradients multiplies gradient by grad_ys, so this line applies the chain rule
-    # policyGrad = tf.gradients(actor,actorWeights,grad_ys=criticActionGrad)
-    # Negative learning rate is used for gradient ascent.  apply_gradients takes one step of gradient descent.
-    # trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).apply_gradients(zip(policyGrad,actorWeights))
     actorLoss = tf.reduce_mean(criticPolicy)
-    trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).minimize(actorLoss)
+    trainActor = tf.train.GradientDescentOptimizer(-actorLearningRate).minimize(actorLoss,var_list=actorWeights)
     
 # Train Targets
 trainCriticTarget = [tf.assign(criticTargetWeight, tau*criticWeight+(1-tau)*criticTargetWeight) for criticTargetWeight, criticWeight in zip(criticTargetWeights, criticWeights)]
@@ -119,11 +95,23 @@ trainActorTarget = [tf.assign(actorTargetWeight, tau*actorWeight+(1-tau)*actorTa
 
 # Function for plotting performance curve
 def performanceCurve(cummulativeRewardList, realTime=False):
+    plt.figure('perf')
     plt.cla()
     plt.plot(cummulativeRewardList)
     plt.xlabel('episode')
     plt.ylabel('cummulative reward')
     plt.title(envName+' Performance Curve')
+    if realTime:
+        plt.pause(.0001)
+
+# Function for plotting performance curve
+def lossPlot(lossList, realTime=False):
+    plt.figure('loss')
+    plt.cla()
+    plt.plot(lossList)
+    plt.xlabel('time-step')
+    plt.ylabel('critic loss')
+    plt.title(envName+' Critic Loss')
     if realTime:
         plt.pause(.0001)
 
@@ -140,6 +128,7 @@ sess.run([tf.assign(actorTargetWeight, actorWeight) for actorTargetWeight, actor
 R = deque()
 # Initialize a list to store cummulative rewards from each episode.  This is used for plotting the learning curve.
 cummulativeRewardList = []
+lossList = []
 # Training loop
 for episode in range(nEpisodes):
     # Initialize Ornstein-Uhlenbeck noise
@@ -156,16 +145,19 @@ for episode in range(nEpisodes):
         # Choose action
         action = sess.run(actor, feed_dict={s:state.reshape((1,sDim))})[0]
         # Update Ornstein-Uhlenbeck noise
-        noise += -theta*noise + sigma*np.array([random.random() for i in range(aDim)])
+        #noise += -theta*noise + sigma*np.array([random.random() for i in range(aDim)])
+        # Gaussian noise
+        noise = np.random.normal(scale=std,size=aDim)
         # Apply action with noise to environment
-        stateNext, reward, doneReport, info = env.step(action+noise)
+        totalAction = np.clip(action+noise,-1.,1.)
+        stateNext, reward, doneReport, info = env.step(totalAction)
         # Render
         if renderDuringTraining:
             env.render()
         # Update cummulative reward (used for plotting performance curve)
         cummulativeReward += reward
         # Add this transition to the replay buffer
-        R.append({'s':state, 'a':action+noise, 'r':[reward], 'sNext':stateNext})
+        R.append({'s':state, 'a':totalAction, 'r':[reward], 'sNext':stateNext})
         if len(R) > replayBufferSize:
             R.popleft()
         # Sample a minibatch from the replay buffer
@@ -179,6 +171,8 @@ for episode in range(nEpisodes):
         sNextBatch = [sample['sNext'] for sample in minibatch]
         # Calculate actor target output for critic loss function
         aTargetBatch = sess.run(actorTarget, feed_dict={sTarget:sNextBatch})
+        # Calculate critic loss for plotting
+        lossList.append(sess.run(L,feed_dict={s:sBatch,a:aBatch,r:rBatch,sTarget:sNextBatch,aTarget:aTargetBatch}))
         # Update each network using their respective training ops
         sess.run(trainCritic,feed_dict={r:rBatch,sTarget:sNextBatch,aTarget:aTargetBatch,s:sBatch,a:aBatch})
         sess.run(trainActor,feed_dict={s:sBatch,a:aBatch})
@@ -193,11 +187,15 @@ for episode in range(nEpisodes):
             # Update the performance plot
             if plotLearningCurve:
                 performanceCurve(cummulativeRewardList, realTime=True)
+            if plotLoss:
+                lossPlot(lossList,realTime=True)
             # Save network weights every 200 episodes
             if episode % 200 == 0:
                 print('Saving models')
                 tf.train.Saver().save(sess, './models/'+envName+'Agent')
                 performanceCurve(cummulativeRewardList)
                 plt.savefig('./models/'+envName+'PerformanceCurve.pdf')
+                lossPlot(lossList)
+                plt.savefig('./models/'+envName+'CriticLoss.pdf')
             done = True
 

@@ -3,7 +3,7 @@ import tensorflow as tf
 import gym
 import roboschool
 
-envName = 'RoboschoolInvertedPendulumSwingup-v1'
+envName = 'HalfCheetah-v2'
 
 env = gym.make(envName)
 sDim = env.observation_space.shape[0]
