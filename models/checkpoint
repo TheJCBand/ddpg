@@ -1,2 +1,2 @@
-model_checkpoint_path: "HalfCheetah-v2Agent"
-all_model_checkpoint_paths: "HalfCheetah-v2Agent"
+model_checkpoint_path: "Reacher-v2Agent"
+all_model_checkpoint_paths: "Reacher-v2Agent"

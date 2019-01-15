@@ -16,10 +16,11 @@ nActorUnits = [400,300] # Number of nodes in each hidden layer of critic network
 nEpisodes = 25000 # Number of episodes to train for
 sigma = 0.2 # Orenstein-Uhlenbeck parameters
 theta = 0.15
-std = 0.1 # Gaussian noise parameter
+std = 0.01 # Gaussian noise parameter
 minibatchSize = 64 
 gamma = 0.99 # Discount factor
 tau = 0.001 # Parameter for updating target networks
+useOU = True
 replayBufferSize = 10**6
 criticLearningRate = 10**-3 
 actorLearningRate = 10**-4
@@ -41,8 +42,8 @@ aTarget = tf.placeholder(tf.float32, shape=(None,aDim))
 r = tf.placeholder(tf.float32, shape=(None,1))
 
 # Define L2 regularizer
-# reg = tf.contrib.layers.l2_regularizer(decay)
-# reg = None
+reg = tf.contrib.layers.l2_regularizer(decay)
+reg = None
 
 # Function for defining simple MLP network
 def mlp(net,nUnits,outputUnits,activation=tf.nn.relu,outputActivation=None,trainable=True,name=None):
@@ -52,23 +53,48 @@ def mlp(net,nUnits,outputUnits,activation=tf.nn.relu,outputActivation=None,train
 
 # Critic network
 with tf.variable_scope('critic'):
-    critic = mlp(tf.concat([s,a],axis=-1),nCriticUnits,1)
+    critic = tf.layers.batch_normalization(s)
+    critic = tf.layers.dense(critic,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg)
+    critic = tf.layers.batch_normalization(critic)
+    critic = tf.keras.layers.concatenate([critic,a])
+    critic = tf.layers.dense(critic,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg)
+    critic = tf.layers.dense(critic,1,kernel_regularizer=reg)
 
 # Critic target network
 with tf.variable_scope('criticTarget'):
-    criticTarget = mlp(tf.concat([sTarget,aTarget],axis=-1),nCriticUnits,1,trainable=False)
+    criticTarget = tf.layers.batch_normalization(sTarget,trainable=False)
+    criticTarget = tf.layers.dense(criticTarget,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg,trainable=False)
+    criticTarget = tf.layers.batch_normalization(criticTarget,trainable=False)
+    criticTarget = tf.keras.layers.concatenate([criticTarget,aTarget],trainable=False)
+    criticTarget = tf.layers.dense(criticTarget,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg,trainable=False)
+    criticTarget = tf.layers.dense(criticTarget,1,kernel_regularizer=reg,trainable=False)
 
 # Actor network
 with tf.variable_scope('actor'):
-    actor = mlp(s,nActorUnits,aDim,outputActivation=tf.tanh,name='actor')
-
-# Critic with policy
-with tf.variable_scope('critic',reuse=True):
-    criticPolicy = mlp(tf.concat([s,actor],axis=-1),nCriticUnits,1)
+    actor = tf.layers.batch_normalization(s)
+    actor = tf.layers.dense(actor,nActorUnits[0],activation=tf.nn.relu)
+    actor = tf.layers.batch_normalization(actor)
+    actor = tf.layers.dense(actor,nActorUnits[1],activation=tf.nn.relu)
+    actor = tf.layers.batch_normalization(actor)
+    actor = tf.layers.dense(actor,aDim,activation=tf.nn.tanh,name='actor')
 
 # Actor target network
 with tf.variable_scope('actorTarget'):
-    actorTarget = mlp(sTarget,nActorUnits,aDim,outputActivation=tf.tanh,trainable=False)
+    actorTarget = tf.layers.batch_normalization(sTarget)
+    actorTarget = tf.layers.dense(actorTarget,nActorUnits[0],activation=tf.nn.relu,trainable=False) 
+    actorTarget = tf.layers.batch_normalization(actorTarget)
+    actorTarget = tf.layers.dense(actorTarget,nActorUnits[1],activation=tf.nn.relu,trainable=False)
+    actorTarget = tf.layers.batch_normalization(actorTarget)
+    actorTarget = tf.layers.dense(actorTarget,aDim,activation=tf.nn.tanh,trainable=False)
+
+# Critic with policy
+with tf.variable_scope('critic',reuse=True):
+    criticPolicy = tf.layers.batch_normalization(s)
+    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[0],activation=tf.nn.relu,kernel_regularizer=reg)
+    criticPolicy = tf.layers.batch_normalization(criticPolicy)
+    criticPolicy = tf.keras.layers.concatenate([criticPolicy,actor])
+    criticPolicy = tf.layers.dense(criticPolicy,nCriticUnits[1],activation=tf.nn.relu,kernel_regularizer=reg)
+    criticPolicy = tf.layers.dense(criticPolicy,1,kernel_regularizer=reg)
 
 # Get weight variables for each network
 criticWeights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope='critic/')
@@ -144,10 +170,12 @@ for episode in range(nEpisodes):
     while not done:
         # Choose action
         action = sess.run(actor, feed_dict={s:state.reshape((1,sDim))})[0]
-        # Update Ornstein-Uhlenbeck noise
-        #noise += -theta*noise + sigma*np.array([random.random() for i in range(aDim)])
-        # Gaussian noise
-        noise = np.random.normal(scale=std,size=aDim)
+        if useOU:
+            # Update Ornstein-Uhlenbeck noise
+            noise += -theta*noise + sigma*np.array([random.random() for i in range(aDim)])
+        else:
+            # Gaussian noise
+            noise = np.random.normal(scale=std,size=aDim)
         # Apply action with noise to environment
         totalAction = np.clip(action+noise,-1.,1.)
         stateNext, reward, doneReport, info = env.step(totalAction)
